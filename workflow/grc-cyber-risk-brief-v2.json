@@ -1,0 +1,286 @@
+{
+  "name": "GRC Cyber Risk Brief (v2)",
+  "nodes": [
+    {
+      "id": "b1",
+      "name": "Every Morning 8 AM",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 8
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "b2",
+      "name": "Fetch Security News (RSS)",
+      "type": "n8n-nodes-base.rssFeedRead",
+      "typeVersion": 1.1,
+      "position": [
+        220,
+        0
+      ],
+      "parameters": {
+        "url": "https://feeds.feedburner.com/TheHackersNews",
+        "options": {}
+      }
+    },
+    {
+      "id": "b3",
+      "name": "Keep Latest 5",
+      "type": "n8n-nodes-base.limit",
+      "typeVersion": 1,
+      "position": [
+        440,
+        0
+      ],
+      "parameters": {
+        "maxItems": 5
+      }
+    },
+    {
+      "id": "b4",
+      "name": "Combine Articles",
+      "type": "n8n-nodes-base.aggregate",
+      "typeVersion": 1,
+      "position": [
+        660,
+        0
+      ],
+      "parameters": {
+        "fieldsToAggregate": {
+          "fieldToAggregate": [
+            {
+              "fieldToAggregate": "title"
+            },
+            {
+              "fieldToAggregate": "contentSnippet"
+            },
+            {
+              "fieldToAggregate": "link"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "b5",
+      "name": "AI Risk Analyst",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.5,
+      "position": [
+        880,
+        0
+      ],
+      "parameters": {
+        "promptType": "define",
+        "text": "=You are a GRC analyst at a Saudi organization. Analyze these {{ $json.title.length }} cybersecurity news items.\n\nFor EACH item return an object with these keys:\n- \"headline\": one line\n- \"summary\": 2 sentences, factual, only from the given text\n- \"risk\": \"High\", \"Medium\" or \"Low\"\n- \"category\": one of \"Vulnerability\", \"Threat Actor\", \"Data Breach\", \"Malware\", \"Policy/Regulation\", \"Other\"\n- \"affected_technology\": the product or vendor affected, or \"N/A\"\n- \"ecc_domain\": the NCA Essential Cybersecurity Controls (ECC) main domain it relates to most, one of \"1 Cybersecurity Governance\", \"2 Cybersecurity Defense\", \"3 Cybersecurity Resilience\", \"4 Third-Party and Cloud Computing Cybersecurity\", \"5 Industrial Control Systems Cybersecurity\"\n- \"recommended_action\": one short action for the security team\n- \"source\": the link, copied exactly\n\nReturn ONLY a JSON array, no markdown, no extra text.\n\nTitles: {{ JSON.stringify($json.title) }}\nSnippets: {{ JSON.stringify($json.contentSnippet) }}\nLinks: {{ JSON.stringify($json.link) }}"
+      }
+    },
+    {
+      "id": "b6",
+      "name": "OpenAI Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        880,
+        220
+      ],
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-4o-mini",
+          "mode": "list",
+          "cachedResultName": "gpt-4o-mini"
+        },
+        "options": {
+          "temperature": 0.2
+        }
+      }
+    },
+    {
+      "id": "b7",
+      "name": "Score & Flag Risks",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1180,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Parse the AI output and enrich each record for the risk register\nconst WATCHLIST = ['Microsoft','Windows','Exchange','Office','Fortinet','Cisco','VMware','Oracle','SAP','Citrix','Ruby on Rails','Rails','Linux','Chrome','Apache','Ivanti','Palo Alto'];\n\nlet raw = $input.first().json.text || '';\nraw = raw.replace(/^\\s*```(json)?/i, '').replace(/```\\s*$/, '').trim();\nconst records = JSON.parse(raw);\nconst today = $now.toFormat('yyyy-MM-dd');\n\nreturn records.map(r => {\n  const text = (r.headline + ' ' + r.affected_technology + ' ' + r.summary).toLowerCase();\n  const hits = WATCHLIST.filter(w => text.includes(w.toLowerCase()));\n  const match = hits.length > 0;\n  const status = (r.risk === 'High' && match) ? 'Escalate' : (r.risk === 'High' ? 'Review' : 'Monitor');\n  return { json: {\n    'Date': today,\n    'Headline': r.headline,\n    'Risk': r.risk,\n    'Category': r.category,\n    'Affected Technology': r.affected_technology,\n    'ECC Domain': r.ecc_domain,\n    'Watchlist Match': match ? 'Yes (' + hits.join(', ') + ')' : 'No',\n    'Recommended Action': r.recommended_action,\n    'Status': status,\n    'Source': r.source\n  }};\n});"
+      }
+    },
+    {
+      "id": "b8",
+      "name": "Log to Risk Register",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1420,
+        -120
+      ],
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Risk Register"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "b9",
+      "name": "Build Email Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1420,
+        120
+      ],
+      "parameters": {
+        "jsCode": "// Build one HTML email from all records\nconst rows = $input.all().map(i => i.json);\nconst color = { High: '#C0392B', Medium: '#B9770E', Low: '#5D6D7E' };\nconst order = { High: 0, Medium: 1, Low: 2 };\nrows.sort((a, b) => order[a.Risk] - order[b.Risk]);\nconst esc = s => String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;');\nconst count = k => rows.filter(r => r.Risk === k).length;\nconst escalate = rows.filter(r => r.Status === 'Escalate').length;\n\nlet html = '<div style=\"font-family:Arial,sans-serif;max-width:760px\">';\nhtml += '<h2 style=\"margin:0 0 4px\">Daily Cyber Risk Brief</h2>';\nhtml += '<p style=\"color:#555;margin:0 0 16px\">' + rows[0].Date + ' &middot; ' + rows.length + ' items &middot; High: ' + count('High') + ' &middot; Medium: ' + count('Medium') + ' &middot; Low: ' + count('Low') + ' &middot; Escalate: ' + escalate + '</p>';\nfor (const r of rows) {\n  html += '<div style=\"border-left:4px solid ' + color[r.Risk] + ';padding:8px 12px;margin:0 0 12px;background:#fafafa\">';\n  html += '<b>' + esc(r.Headline) + '</b><br>';\n  html += '<span style=\"color:' + color[r.Risk] + '\"><b>' + r.Risk + '</b></span> &middot; ' + esc(r.Category) + ' &middot; ' + esc(r['ECC Domain']) + ' &middot; Status: <b>' + r.Status + '</b><br>';\n  html += '<span style=\"color:#333\">Affected: ' + esc(r['Affected Technology']) + ' &middot; Watchlist: ' + esc(r['Watchlist Match']) + '</span><br>';\n  html += '<span>Action: ' + esc(r['Recommended Action']) + '</span><br>';\n  html += '<a href=\"' + esc(r.Source) + '\">Source</a></div>';\n}\nhtml += '<p style=\"color:#888;font-size:12px\">Generated automatically by n8n. AI output: verify against the source before acting. Logged to the Security News Risk Register.</p></div>';\nreturn [{ json: { subject: 'Cyber Risk Brief ' + rows[0].Date + ' | ' + count('High') + ' High, ' + escalate + ' Escalate', html } }];"
+      }
+    },
+    {
+      "id": "b10",
+      "name": "Email Risk Brief",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        1660,
+        120
+      ],
+      "parameters": {
+        "sendTo": "YOUR_EMAIL@example.com",
+        "subject": "={{ $json.subject }}",
+        "emailType": "html",
+        "message": "={{ $json.html }}",
+        "options": {
+          "appendAttribution": false
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Every Morning 8 AM": {
+      "main": [
+        [
+          {
+            "node": "Fetch Security News (RSS)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Security News (RSS)": {
+      "main": [
+        [
+          {
+            "node": "Keep Latest 5",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Keep Latest 5": {
+      "main": [
+        [
+          {
+            "node": "Combine Articles",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Combine Articles": {
+      "main": [
+        [
+          {
+            "node": "AI Risk Analyst",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Risk Analyst",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Risk Analyst": {
+      "main": [
+        [
+          {
+            "node": "Score & Flag Risks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Score & Flag Risks": {
+      "main": [
+        [
+          {
+            "node": "Log to Risk Register",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Build Email Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Email Report": {
+      "main": [
+        [
+          {
+            "node": "Email Risk Brief",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
